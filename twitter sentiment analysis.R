@@ -30,11 +30,14 @@ EnsurePackage("tm")
 # caret package needed for confusionMatrix()
 EnsurePackage("caret")
 EnsurePackage("wordcloud")
+EnsurePackage("lsa")
+# needed for clusplot()
+EnsurePackage("cluster")
 
 
 # 2. set working directory
 getwd()
-path = 'C:/Users/ali3/Documents/cisco data science program/cisco DSP 2016/capstone/sample data from kaggle & such/'
+path = 'C:/Users/ali3/Documents/data science/cisco data science program/cisco DSP 2016/capstone/sample data from kaggle & such/'
 setwd(path)
 getwd() # confirm that you have changed the working directory
 
@@ -106,8 +109,29 @@ dtm.train = create_matrix(data.train$SentimentText,
 dtm.train.matrix = as.matrix(dtm.train)
 
 
-# train naive classifier
-NBclassifier = naiveBayes(dtm.train.matrix, data.train$Sentiment)
+
+#################################### create word cloud #################################
+# must transpose the document-term-matrix into term-document-matrix in order for 
+# the word cloud to work correctly
+tdm.train.matrix = t(dtm.train.matrix)
+
+# sort the matrix by their term frequencies 
+tdm.train.sorted = sort(rowSums(tdm.train.matrix), decreasing = T)
+df.train = data.frame(words = names(tdm.train.sorted), freq = tdm.train.sorted)
+wordcloud(df.train$words, 
+          df.train$freq, 
+          max.words = 300, 
+          colors = brewer.pal(8, "Dark2"),
+          scale = c(1, 0.5), 
+          # both numbers indicate font size (i think); if its (3,5) or (1,1), it'll be too 
+          # cramped and wont fit in a screen nicely as a round circle, but rather squeezed 
+          # into a square; so far (1,0.5) has been the best combo
+          random.order = F)
+# wordcloud(words,freq,scale=c(4,.5),min.freq=3,max.words=Inf,
+# random.order=TRUE, random.color=FALSE, rot.per=.1,
+# colors="black",ordered.colors=FALSE,use.r.layout=FALSE,
+# fixed.asp=TRUE, ...)
+
 
 # # create a corpus that contain the training tweets
 # corpus.train = Corpus(VectorSource(data.train$SentimentText))
@@ -125,11 +149,192 @@ NBclassifier = naiveBayes(dtm.train.matrix, data.train$Sentiment)
 # # cant use code in line below b/c matrix is sparce and taking up too much computing power (mainly memory)
 # matrix.train = as.matrix(tdm.train)
 # 
+# matrix.train.sorted = sort(rowSums(matrix.train), decreasing = T)
+# df.train = data.frame(words = names(matrix.train.sorted), freq = matrix.train.sorted)
+# wordcloud(df.train$words, 
+#           df.train$freq, 
+#           max.words = 300, 
+#           colors = brewer.pal(10, "Dark2"),
+#           scale = c(3, 0.5),
+#           random.order = F)
+
 # # build naive bayes classifier
 # # > dim(matrix.train)
 # # [1] 2739  736
 # # so must use transpose of the matrix
 # NBclassifier = naiveBayes(t(matrix.train), data.train$Sentiment)
+
+
+################################################################################################
+#################################### dimension reduction w LSA #################################
+################################################################################################
+# dimension reduction leveraging Latent Semantic Analysis (LSA) using singular value decomposition (SVD) 
+# because of following two reasons:
+#   1. As there are k dimensions (number of documents/posts/tweets) and n terms (number of unique words), 
+#   therefore, it will be difficult to analyze all these at the same time.
+#   2. TDM is essentially a very sparse matrix (99% sparseness is very common). So to remove 
+#   sparseness, LSA is used.
+
+# LSA using SVD
+# weightTfIdf {tm}: Weight by Term Frequency - Inverse Document Frequency
+# Weight a term-document matrix by term frequency - inverse document frequency.
+# weightTfIdf(m, normalize = TRUE)
+# m: A TermDocumentMatrix in term frequency format.
+# normalize: A Boolean value indicating whether the term frequencies should be normalized.
+tfidf.train = weightTfIdf(dtm.train)
+# since the input m has to be a termdocumentmatrix obj, must input dtm.train, which is directly 
+# created by the create_matrix()
+
+# as reminder: 
+# dtm.train.matrix = as.matrix(dtm.train), and
+# tdm.train.matrix = t(dtm.train.matrix)
+tfidf.train.matrix = as.matrix(tfidf.train)
+
+# lsa {lsa}: Create a vector space with Latent Semantic Analysis (LSA)
+# Calculates a latent semantic space from a given document-term matrix.
+# lsa( x, dims=dimcalc_share() )
+# x: a document-term matrix (recommeded to be of class textmatrix), containing documents in colums, terms in rows and occurrence frequencies in the cells.
+# dims: either the number of dimensions or a configuring function.
+lsa.train = lsa(tdm.train.matrix, dimcalc_share(share = 0.8))
+lsa.train.tk = as.data.frame(lsa.train$tk)
+lsa.train.dk = as.data.frame(lsa.train$dk)
+lsa.train.sk = as.data.frame(lsa.train$sk)
+
+
+#################################### lsa clustering ####################################
+#randomly creating 150 clusters with k-means
+k150.train.tk = kmeans(scale(lsa.train.tk), 
+                       centers=150, 
+                       nstart=20)
+c150.train.tk = aggregate(cbind(V1,V2,V3) ~ k150.train.tk$cluster,
+                          data = lsa.train.tk,
+                          FUN = mean)
+
+k150.train.dk = kmeans(scale(lsa.train.dk), 
+                       centers=50, 
+                       nstart=20)
+c150.train.dk = aggregate(cbind(V1,V2,V3) ~ k150.train.dk$cluster,
+                          data = lsa.train.dk,
+                          FUN = mean)
+
+#hierarchical clustering to find optimal # of clusters for c150.train.tk 
+dist.train.c150 = dist(scale(c150.train.tk[, -1]))
+hclust.train = hclust(d,method='ward.D')
+par(oma=c(0,0,2,0))
+plot(hclust.train, hang = -1)
+# hang: The fraction of the plot height by which labels should hang below the rest of the plot.
+#       A negative value will cause the labels to hang down from 0.
+
+# rect.hclust {stats}: Draw Rectangles Around Hierarchical Clusters
+# Draws rectangles around the branches of a dendrogram highlighting the corresponding clusters. 
+#     First the dendrogram is cut at a certain level, then a rectangle is drawn around selected branches.
+# rect.hclust(tree, k = NULL, which = NULL, x = NULL, h = NULL, border = 2, cluster = NULL)
+# k, h: Scalar. Cut the dendrogram such that either exactly k clusters are produced or by cutting at height h.
+rect.hclust(hclust.train, h=20, border="blue") #2
+rect.hclust(hclust.train, h=12, border="cyan") #2
+rect.hclust(hclust.train, h=35, border="red") #2
+# 2 clusters seem to be the optimal number
+k2.train.tk = kmeans(scale(lsa.train.tk), 
+                       centers=2, 
+                       nstart=20)
+c2.train.tk = aggregate(cbind(V1,V2,V3) ~ k150.train.tk$cluster,
+                          data = lsa.train.tk,
+                          FUN = mean)
+
+#hierarchical clustering to find optimal no of clusters for c150.train.dk 
+dist.train.c150 = dist(scale(c150.train.dk[,-1]))
+hclust.train = hclust(dist.train.c150, method='ward.D')
+plot(hclust.train, hang = -1)
+rect.hclust(hclust.train, h=5, border="blue") #7
+rect.hclust(hclust.train, h=15, border="red") #2
+rect.hclust(hclust.train, h=8, border="green") #4
+# so pick 2 again, since thats the most optimal number
+k2.train.dk = kmeans(scale(lsa.train.dk), 
+                     centers=2, 
+                     nstart=20)
+c2.train.dk = aggregate(cbind(V1,V2,V3) ~ k150.train.dk$cluster,
+                        data = lsa.train.dk,
+                        FUN = mean)
+
+# R does not by default allot any space to the outer margins; see par("oma")
+# this will solve the problem of plot titles getting cut off
+# par(oma=c(0,0,2,0))
+par(xpd=NA,oma=c(0,0,2,0))
+clusplot(lsa.train.dk, 
+         k2.train.dk$cluster, 
+         color = T,
+         shade = T,
+         labels = 2,
+         lines = 0
+         )
+# clusplot {cluster}: Bivariate Cluster Plot (of a Partitioning Object)
+# Draws a 2-dimensional "clusplot" (clustering plot) on the current graphics device. 
+#     The generic function has a default and a partition method.
+# clusplot(x, ...)
+# x: an R object, here, specifically an object of class "partition", 
+#   e.g. created by one of the functions pam, clara, or fanny.
+## S3 method for class 'partition'
+# clusplot(x, main = NULL, dist = NULL, ...)
+# main: title for the plot; when NULL (by default), a title is constructed, using x$call.
+# dist: when x does not have a diss nor a data component, e.g., for pam(dist(*), keep.diss=FALSE), 
+#       dist must specify the dissimilarity for the clusplot.
+
+# Result of clustering on lsa.train.tk
+# reminder: tdm.train.sorted = sort(rowSums(tdm.train.matrix), decreasing = T)
+# df.train = data.frame(words = names(tdm.train.sorted), freq = tdm.train.sorted)
+k2.train.tk1 = df.train[k2.train.tk$cluster == 1,]
+k2.train.tk2 = df.train[k2.train.tk$cluster == 2,]
+wordcloud(k2.train.tk1$words, 
+          k2.train.tk1$freq, 
+          max.words = 200, 
+          colors = brewer.pal(8, "Dark2"),
+          scale = c(1, 0.5), 
+          random.order = F)
+wordcloud(k2.train.tk2$words, 
+          k2.train.tk2$freq, 
+          max.words = 200, 
+          colors = brewer.pal(8, "Dark2"),
+          scale = c(1, 0.5), 
+          random.order = F)
+
+# making sure the plot title is not cut off
+par(xpd=NA,oma=c(0,0,2,0))
+clusplot(lsa.train.tk, 
+         k2.train.tk$cluster, 
+         color = T,
+         shade = T,
+         labels = 2,
+         lines = 0
+)
+
+
+# lsa.train.tk
+# learn the first 3 dimensions only
+lsa.train.tk3 = data.frame(words = rownames(lsa.train.tk), lsa.train.tk[, 1:3])
+
+# plot the dimension 1 vs dimension 2
+plot(lsa.train.tk3$V1, lsa.train.tk3$V2)
+# replace the dots/circles w the texts, so u have a better understanding
+text(lsa.train.tk3$V1, lsa.train.tk3$V2, label=lsa.train.tk3$words)
+
+plot(lsa.train.tk3$V2, lsa.train.tk3$V3)
+text(lsa.train.tk3$V2, lsa.train.tk3$V3, label=lsa.train.tk3$words)
+
+plot(lsa.train.tk3$V1, lsa.train.tk3$V3)
+text(lsa.train.tk3$V1, lsa.train.tk3$V3, label=lsa.train.tk3$words)
+
+
+
+
+
+
+
+
+
+
+
+# train naive classifier
+NBclassifier = naiveBayes(dtm.train.matrix, data.train$Sentiment)
 
 ############################# test on validation set ##############################################
 # create a corpus that contain the validation tweets
@@ -271,16 +476,4 @@ val.perf = performance(pred.val,
                        measure = "prec",
                        x.measure = "rec"
 )
-
-
-
-#################################### create word cloud #################################
-
-
-
-
-
-
-
-
 
