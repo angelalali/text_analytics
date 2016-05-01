@@ -17,7 +17,7 @@ EnsurePackage <- function(packageName)
   }
 } 
 # EnsurePackage("flexclust") # used for kmeans clustering
-# # EnsurePackage("randomForest")
+EnsurePackage("randomForest")
 # # needed for stratified random sampling fxn createDataPartition()
 # EnsurePackage('caret')
 EnsurePackage('data.table')
@@ -41,7 +41,7 @@ EnsurePackage("cluster")
 
 # 2. set working directory
 getwd()
-path = 'C:/Users/ali3/Documents/data science/cisco data science program/cisco DSP 2016/capstone/sample data from kaggle & such/'
+path = 'C:/Users/ali3/Documents/data science/cisco data science program/cisco DSP 2016/Prof 1 Nagiza, TA Mandar/capstone/sample data from kaggle & such/'
 setwd(path)
 getwd() # confirm that you have changed the working directory
 
@@ -82,6 +82,9 @@ data.orig = read.csv("kaggle-train (w label).csv")
 data.all = data.orig[createDataPartition(y = data.orig$Sentiment,
                                          p = .002,
                                          list = F),]
+
+data.train = data.orig[sample(x = 1:nrow(data.orig), size = floor(.001*nrow(data.orig)), replace = F),]
+
 ## sample data in stratified manner 
 # 70% training, 15% validation, 15% test
 # following method will return index value
@@ -98,6 +101,8 @@ data.test = temp[-data.part, ]
 
 rm(data.part)
 rm(temp)
+
+str(data.train)
 
 # study how the original data look like
 table(data.train$Sentiment)
@@ -118,13 +123,20 @@ tdm.train = TermDocumentMatrix(
   control = list(
     removePunctuation = TRUE,
     stopwords = stopwords(kind = "en"),
+    stemming = function(word) wordStem(word, language = "english"),
     removeNumbers = TRUE, 
     tolower = TRUE,
     weighting = weightTfIdf)
 )
 
+tdm.train
+tdm.train.reduced = removeSparseTerms(tdm.train, sparse = 0.999)
+# original = 4684 terms
+# .99 = 97 terms
+# .999 = 1121 terms
+tdm.train.reduced
+# tdm.train.matrix = as.matrix(tdm.train.reduced)
 tdm.train.matrix = as.matrix(tdm.train)
-
 # matrix.train = as.matrix(tdm.train)
 # 
 # 
@@ -176,18 +188,22 @@ tdm.train.matrix = as.matrix(tdm.train)
 # x: a document-term matrix (recommeded to be of class textmatrix), containing documents in colums, terms in rows and occurrence frequencies in the cells.
 # dims: either the number of dimensions or a configuring function.
 # lsa.train = lsa(tdm.train, dimcalc_share(share = 0.8))
-lsa.train = lsa(tdm.train, dimcalc_share(share = 0.8)) # default: share = 0.5
+lsa.train = lsa(tdm.train, dimcalc_share()) # default: share = 0.5
 # lsa.train.tk = as.data.frame(lsa.train$tk)
 # lsa.train.dk = as.data.frame(lsa.train$dk)
 # lsa.train.sk = as.data.frame(lsa.train$sk)
 
 # mar = c(A,B,C,D);
 # A = bottom;  B = left;  C = up;  D = right
-par(mar=c(5,5,0,2))
+par(mar=c(5,5,2,2))
 plot(lsa.train$sk) # so pick an index value where 75% of the variance is explained
 # so by picking at the elbow location, set the k number (manual for now)
-k = 500
+# k = 400
+# k = 150
 # lsa.train.sk.topk = sum(lsa.train.sk[1:k, 1]) / sum(lsa.train.sk[,1])
+# dynamically pick k
+share = 0.5
+k = min(which(cumsum(lsa.train$sk/sum(lsa.train$sk)) >= share))
 
 # project the training data onto a new dimension w the weights
 # fold_in {lsa}: 
@@ -203,28 +219,6 @@ projected.train.matrix = matrix(projected.train,
 dim(projected.train.matrix)
 length(data.train$Sentiment)
 
-# train naive classifier
-NBclassifier = naiveBayes(t(projected.train.matrix), data.train$Sentiment)
-
-# train a svm
-SVMclassifier = svm(x = t(projected.train.matrix), y = data.train$Sentiment)
-
-# tune svm
-tuneSVM = tune.svm(x = t(projected.train.matrix), 
-                   y = data.train$Sentiment,
-                   cost = 2^7,
-                   epsilon = 0)
-
-tuneSVM$best.parameters
-tuneSVM$best.model
-
-SVM.tuned = tuneSVM$best.model
-
-summary(tuneSVM)
-
-
-
-sum(is.na(tdm.train.matrix))
 
 
 
@@ -241,8 +235,9 @@ cv.container = create_container(
                                 # matrix = projected.train,
                                 matrix = t(projected.train),
                                 labels = data.train$Sentiment,
-                                trainSize = floor(.7 * ncol(projected.train)),
-                                testSize = ceiling(.3 * ncol(projected.train)),
+                                trainSize = 1:(.7 * ncol(projected.train)),
+                                testSize = (.7 * ncol(projected.train)):(ncol(projected.train)),
+                                # testSize = 1:(.3 * ncol(projected.train)),
                                 virgin = F    # F means the test data is also labeled
                                 )
 # projected.train has row = term & col = doc; so we need to transpose it so that row = docs/tweets
@@ -253,15 +248,14 @@ SVMbyContainer = train_model(container = cv.container, algorithm = "SVM")
 #   x and y don't match.
 
 
-cv.SVM = cross_validate(container = cv.container, 
-                        nfold = 5, 
-                        algorithm = "SVM", 
-                        verbose = T    # set to T: it'll provide descriptive output about the training process
-                        )
+cv.SVM = cross_validate(container = cv.container, nfold = 5, algorithm = "SVM", 
+                        verbose = T)    # set to T: it'll provide descriptive output about the training process
 
 cv.Boosting = cross_validate(cv.container, nfold = 5, algorithm = "BOOSTING")
+cv.Boosting$meanAccuracy
 
 cv.Bagging = cross_validate(cv.container, nfold = 5, algorithm = "BAGGING")
+
 
 cv.RF = cross_validate(cv.container, nfold = 5, algorithm = "RF")
 
@@ -269,8 +263,162 @@ cv.RF = cross_validate(cv.container, nfold = 5, algorithm = "RF")
 # Error in na.fail.default(y) : missing values in object
 
 cv.MaxEnt = cross_validate(cv.container, nfold = 5, algorithm = "MAXENT")
+# lowest accuracy so far
 
 
+
+
+
+#################################### building models ##################################
+# train naive classifier
+NBclassifier = naiveBayes(t(projected.train.matrix), data.train$Sentiment)
+
+# train a svm
+SVMclassifier = svm(x = t(projected.train.matrix), y = data.train$Sentiment)
+
+# tune svm
+tuneSVM = tune.svm(x = t(projected.train.matrix), 
+                   y = data.train$Sentiment,
+                   cost = 2^(2:9),
+                   epsilon = seq(0,1,0.1))
+
+tuneSVM$best.parameters
+tuneSVM$best.model
+
+SVM.tuned = tuneSVM$best.model
+
+summary(tuneSVM)
+sum(is.na(tdm.train.matrix))
+
+
+# try to build a bagging model
+Bag.train_model = train_model(container = cv.container,
+                              algorithm = "BOOSTING",
+                              maxitboost = 5)
+
+Bag.train_model$Stump
+Bag.train_model$lablist
+print_algorithms()
+
+# Support Vector Machines with Linear Kernel
+model_train_caret = train(x = t(projected.train.matrix), y = data.train$Sentiment, method = "svmLinear")  
+# accuracy = 51%
+
+# Support Vector Machines with Radial Basis Function Kernel
+model_train_caret = train(x = t(projected.train.matrix), y = data.train$Sentiment, method = "svmRadialSigma")  
+# accuracy = 53% but really bad recall....
+
+# Parallel Random Forest
+model_train_caret = train(x = t(projected.train.matrix), y = data.train$Sentiment, method = "parRF")  
+# accuracy = 57%; recall & precision looks good as well!!! promising!
+
+# Regularized Random Forest
+model_train_caret = train(x = t(projected.train.matrix), y = data.train$Sentiment, method = "RRFglobal")  
+# accuracy = 58%; with even better recall & precisoin!!!! yayyy!!!
+
+# creating a trainControl() object
+trcontrol_rf = trainControl(method = "boot",
+                            number = 7,    # if you dont set this number, default is 25, or 10 for cv; take hella long to process!
+                            repeats = 2,   # For repeated k-fold CV only: the # of complete sets of folds to compute
+                            p = .75,
+                            trim = T,
+                            allowParallel = T   # allow parallel processing if a parallel backend is loaded and available
+                            )
+
+# Random Forest
+model_train_caret = train(x = t(projected.train.matrix), y = data.train$Sentiment, 
+                          method = "rf", trControl = trcontrol_rf, 
+                          model = F  # add model = F to save some memory during processing time
+                          )  
+# accuracy = 59%; good recall & precision too!!!
+
+
+model_train_caret = randomForest(x = t(projected.train.matrix), y = data.train$Sentiment,
+                                 mtry = (nrow(projected.train))^(1/2), 
+                                 replace = T, 
+                                 ntree = 7,   # number of trees to grow
+                                 strata = data.train$Sentiment,   # A (factor) variable that is used for stratified sampling
+                                 sampsize = .9*(ncol(projected.train)),   # Size(s) of sample to draw.
+                                 nodesize = 1   # Minimum size of terminal nodes; default values are different for classification (1) and regression (5).
+                                 )
+# as reminder: projected.train has row = term & col = doc
+# model_train_caret$localImportance
+
+data.val$pred.sentiment = predict(model_train_caret, 
+                                  newdata = t(projected.val.matrix), 
+                                  type = "response",
+                                  na.action = na.fail)
+
+# confusion table to validate your data set
+table(data.val$pred.sentiment, data.val$Sentiment)
+# 0  1
+# 0 44 45
+# 1 35 52
+
+
+
+
+# Bagged Logic Regression
+model_train_caret = train(x = t(projected.train.matrix), y = data.train$Sentiment, method = "logicBag")  
+# accuracy = error
+
+# Bayesian Additive Regression Trees
+model_train_caret = train(x = t(projected.train.matrix), y = data.train$Sentiment, method = "bartMachine")  
+# accuracy = error
+
+# Boosted Classification Trees
+model_train_caret = train(x = t(projected.train.matrix), y = data.train$Sentiment, method = "ada")  
+# accuracy = 54%
+
+# Boosted Generalized Additive Model
+model_train_caret = train(x = t(projected.train.matrix), y = data.train$Sentiment, method = "gamboost")  
+# accuracy = error
+
+# Logic Regression
+model_train_caret = train(x = t(projected.train.matrix), y = data.train$Sentiment, method = "logreg")  
+# accuracy = error
+
+# Oblique Random Forest
+model_train_caret = train(x = t(projected.train.matrix), y = data.train$Sentiment, method = "ORFlog")  
+# accuracy = error
+
+# Oblique Random Forest
+model_train_caret = train(x = t(projected.train.matrix), y = data.train$Sentiment, method = "ORFsvm")  
+# accuracy = error
+
+# Partial Least Squares Generalized Linear Models
+model_train_caret = train(x = t(projected.train.matrix), y = data.train$Sentiment, method = "plsRglm")  
+# accuracy = 51.7%
+
+# Rotation Forest
+model_train_caret = train(x = t(projected.train.matrix), y = data.train$Sentiment, method = "rotationForest")  
+# accuracy = 54%; but bad recall/precision
+
+# Tree-Based Ensembles
+model_train_caret = train(x = t(projected.train.matrix), y = data.train$Sentiment, method = "nodeHarvest")  
+# accuracy = 57% but with really really bad recall/precision...
+
+# oblique random forest
+model_train_caret = train(x = t(projected.train.matrix), y = data.train$Sentiment, method = "ORFsvm")  
+# accuracy = error
+
+
+
+# BagClassifier = bag(x = t(projected.train.matrix), y = data.train$Sentiment,
+#                     B = .7 * nrow(projected.train),
+#                     bagControl = bagControl(
+#                       fit = nnetBag$fit(x = t(projected.train.matrix), y = data.train$Sentiment),
+#                       predict = nnetBag$pred,
+#                       aggregate = nnetBag$aggregate
+#                     )
+# )
+
+
+
+
+
+data(BloodBrain) 
+ctreeBag$aggregate 
 
 
 
@@ -285,10 +433,19 @@ tdm.val = TermDocumentMatrix(
   control = list(
     removePunctuation = TRUE,
     stopwords = stopwords(kind = "en"),
+    stemming = function(word) wordStem(word, language = "english"),
     removeNumbers = TRUE, 
     tolower = TRUE,
-    weighting = weightTfIdf)
+    weighting = weightTfIdf,
+    dictionary = tdm.train$dimnames$Terms ## see explanation below
+    )
 )
+# why using dictionary?
+# When you build the LSA model you are using the vocabulary of the training data. But when you build the TermDocumentMatrix 
+# for the test data, you are using the vocabulary of the test data. The LSA model only know how to handle documents 
+# tabulated against the vocabulary of the training data.
+# One way to remedy this is to create your test TDM with dictionary set to the vocabulary of the training data
+
 # 
 # # build the document-term matrix (dtm)
 # dtm.val = create_matrix(data.val$SentimentText,
@@ -302,9 +459,11 @@ tdm.val = TermDocumentMatrix(
 tdm.val.matrix = as.matrix(tdm.val)
 dim(tdm.val.matrix)
 # lsa.val = lsa(t(dtm.val.matrix), dimcalc_share(share = 0.8))
-lsa.val = lsa(tdm.val, dimcalc_share())
+# lsa.val = lsa(tdm.val, dimcalc_share())
 
-projected.val = fold_in(tdm.val.matrix, lsa.val)[1:k,]
+# projected.val = fold_in(tdm.val.matrix, lsa.val)[1:k,]
+# projct validation data onto the lsa space created with training data 
+projected.val = fold_in(tdm.val.matrix, lsa.train)[1:k,]
 dim(projected.val)
 dim(data.val)
 # make this into a matrix; pass into naivebayes & clas label
@@ -328,6 +487,24 @@ data.val$pred.sentiment = predict(SVMclassifier,
 data.val$pred.sentiment = predict(SVM.tuned, 
                                   newdata = t(projected.val.matrix), 
                                   type = "class",
+                                  na.action = na.fail)
+
+
+# predict using SVM created with container
+data.val$pred.sentiment = predict(SVMbyContainer, 
+                                  newdata = t(projected.val.matrix), 
+                                  type = "class",
+                                  na.action = na.fail)
+
+# predict using Bagging created by create_model from RTextTools package
+data.val$pred.sentiment = predict(model_train_caret, 
+                                  newdata = t(projected.val.matrix), 
+                                  type = "response",
+                                  na.action = na.fail)
+
+data.val$pred.sentiment = predict(model_train_caret, 
+                                  newdata = t(projected.val.matrix), 
+                                  type = "raw",
                                   na.action = na.fail)
 
 # confusion table to validate your data set
@@ -389,29 +566,31 @@ names(pred.eval.val$byClass)
 # [7] "Detection Prevalence" "Balanced Accuracy" 
 
 perf.val1 = as.data.frame(pred.eval.val$overall)
-colnames(perf.val1) = 'value'
+colnames(perf.val1) = 'val'
 perf.val1
-#                     value
-# Accuracy       0.53974359
-# Kappa          0.07645119
-# AccuracyLower  0.50403027
-# AccuracyUpper  0.57515542
-# AccuracyNull   0.53205128
-# AccuracyPValue 0.34679370
-# McnemarPValue  0.83279993
+# random forest rf w control
+#                 value
+# Accuracy        0.58
+# Kappa           0.15
+# AccuracyLower   0.50
+# AccuracyUpper   0.65
+# AccuracyNull    0.55
+# AccuracyPValue  0.25
+# McnemarPValue   0.73
 
 perf.val2 = as.data.frame(pred.eval.val$byClass)
 colnames(perf.val2) = 'value'
 perf.val2
-#                         value
-# Sensitivity          0.3382353
-# Specificity          0.6588235
-# Pos Pred Value       0.4423077
-# Neg Pred Value       0.5544554
-# Prevalence           0.4444444
-# Detection Rate       0.1503268
-# Detection Prevalence 0.3398693
-# Balanced Accuracy    0.4985294
+# random forest rf w control
+#                       value
+# Sensitivity           0.56
+# Specificity           0.60
+# Pos Pred Value        0.53
+# Neg Pred Value        0.62
+# Prevalence            0.45
+# Detection Rate        0.25
+# Detection Prevalence  0.47
+# Balanced Accuracy     0.58
 
 pred.eval.val
 # Confusion Matrix and Statistics
@@ -443,6 +622,9 @@ pred.eval.val
 # an optional character string for the factor level that corresponds to a "positive" result 
 # (if that makes sense for your data). If there are only two factor levels, the first level 
 # will be used as the "positive" result.
+
+
+
 
 
 
